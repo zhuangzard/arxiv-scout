@@ -100,7 +100,7 @@ class PPTGenerator:
                             pix = fitz.Pixmap(fitz.csRGB, pix)
                         
                         # 过滤太小的图片
-                        if pix.width > 100 and pix.height > 100:
+                        if pix.width > 300 and pix.height > 200:
                             img_bytes = pix.tobytes("png")
                             figures.append({
                                 'page': page_num + 1,  # 从1开始
@@ -548,7 +548,7 @@ class PPTGenerator:
                 current_page_content.append(para.strip())
                 
                 # 每页大约2-3个段落
-                if len(current_page_content) >= 2 and len('\n\n'.join(current_page_content)) > 800:
+                if len(current_page_content) >= 2 and len('\n\n'.join(current_page_content)) > 400:
                     page_count += 1
                     if page_count == 1:
                         title = "问题背景与动机"
@@ -609,7 +609,7 @@ class PPTGenerator:
                     current_page_content.append(para.strip())
                     
                     # 每页控制内容长度
-                    if len('\n\n'.join(current_page_content)) > 1000:
+                    if len('\n\n'.join(current_page_content)) > 500:
                         page_count += 1
                         if page_count == 1:
                             title = "核心方法"
@@ -676,7 +676,7 @@ class PPTGenerator:
                 if para.strip():
                     current_page_content.append(para.strip())
                     
-                    if len('\n\n'.join(current_page_content)) > 900:
+                    if len('\n\n'.join(current_page_content)) > 450:
                         page_count += 1
                         if page_count == 1:
                             title = "实验结果分析"
@@ -735,7 +735,7 @@ class PPTGenerator:
         content = self.clean_markdown_format(medical_content)
         
         # 分为应用场景和迁移方案
-        if len(content) > 1200:
+        if len(content) > 600:
             parts = content.split('\n\n')
             mid = len(parts) // 2
             
