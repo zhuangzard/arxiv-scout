@@ -12,3 +12,8 @@ temp/
 *.egg-info/
 dist/
 build/
+*.wav
+.env.local
+credentials*
+*secret*
+*token*

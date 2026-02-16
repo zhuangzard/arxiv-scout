@@ -279,13 +279,80 @@ bash SKILL_DIR/generate-audio.sh output_podcast.txt output_podcast.mp3
 生成时间: {datetime}
 ```
 
-### 语音生成指令
+### 语音生成 — 三种方案
+
+#### 方案A: 豆包网页版（免费，推荐）⭐
+通过 doubao.com AI播客功能，输入论文PDF链接自动生成 **28-30分钟双人对话播客**。
+
+**优势**: 免费、双人对话、时长充足、质量最高
+**详细流程**: 见 `doubao-podcast-flow.md`
+
+**Agent自动化步骤** (通过 browser 工具执行):
+1. `browser navigate` → `https://www.doubao.com/chat/` (profile=openclaw)
+2. `browser snapshot` → 找到并点击 "AI 播客" 按钮
+3. `browser type` → 输入 `https://arxiv.org/pdf/{arxiv_id}` 然后回车
+   - ⚠️ 必须用 `/pdf/` 链接，不是 `/abs/`！否则只读摘要生成3分钟短播客
+4. 轮询等待生成完成（约3-5分钟），检测时长从 `--:--` 变为具体数字:
+   ```javascript
+   document.body.innerText.match(/\d{2}:\d{2}\s*\|\s*\d{2}:\d{2}/)
+   ```
+5. 设置 JSON.stringify 拦截器:
+   ```javascript
+   window.__payloads = [];
+   const origStringify = JSON.stringify;
+   JSON.stringify = function(...args) {
+     const result = origStringify.apply(this, args);
+     if(typeof result === 'string' && result.includes('episode_id')) {
+       window.__payloads.push(result);
+     }
+     return result;
+   };
+   ```
+6. 点击下载按钮 → 从 `window.__payloads` 提取 `episode_id`
+7. 调用API获取签名下载URL:
+   ```javascript
+   const resp = await fetch('/api/doubao/do_action_v2?version_code=20800&language=zh&device_platform=web&aid=497858&real_aid=497858&pkg_type=release_version&samantha_web=1&use-olympus-account=1', {
+     method: 'POST', credentials: 'include',
+     headers: {'Content-Type': 'application/json'},
+     body: JSON.stringify({
+       scene: 'FPA_Podcast',
+       payload: JSON.stringify({
+         api_name: 'GetGenPodcastVideoUrl',
+         params: JSON.stringify({episode_id: 'EPISODE_ID_HERE'})
+       })
+     })
+   });
+   const data = await resp.json();
+   const videoUrl = JSON.parse(data.data.resp).video_url;
+   ```
+8. `exec curl -L -o /tmp/podcast.wav "$VIDEO_URL"`
+9. `exec ffmpeg -i /tmp/podcast.wav -codec:a libmp3lame -b:a 64k output.mp3 -y`
+
+#### 方案B: 火山引擎API（付费，~$0.37/篇）
+使用 `volcengine-podcast.py`，生成约10分钟双人播客。
+
 ```bash
-# 使用edge-tts生成MP3（默认），sag作为备选
-edge-tts -t "$(cat {script_file}.txt)" -v YunyangNeural -f mp3 --write-media {output_file}.mp3
-# 或使用sag CLI（需ElevenLabs API key）
-# sag speak -f {script_file}.txt -o {output_file}.mp3 --no-play --lang zh --model-id eleven_multilingual_v2
+# 需要环境变量: VOLC_APP_ID, VOLC_ACCESS_TOKEN
+python3 SKILL_DIR/volcengine-podcast.py --url "https://arxiv.org/abs/{arxiv_id}" -o output.mp3
+python3 SKILL_DIR/volcengine-podcast.py --text script.txt -o output.mp3
 ```
+
+#### 方案C: edge-tts（免费备用，单人朗读）
+微软TTS单人朗读，适合快速生成或方案A/B不可用时的降级方案。
+
+```bash
+bash SKILL_DIR/generate-audio.sh output_podcast.txt output_podcast.mp3
+# 内部调用: edge-tts -v YunyangNeural
+```
+
+### 播客方案选择建议
+| 方案 | 成本 | 时长 | 质量 | 自动化 |
+|------|------|------|------|--------|
+| A: 豆包网页版 | 免费 | 28-30分钟 | ⭐⭐⭐ 双人对话 | Agent browser操作 |
+| B: 火山引擎API | ~$0.37/篇 | ~10分钟 | ⭐⭐ 双人对话 | 脚本直接调用 |
+| C: edge-tts | 免费 | ~25分钟 | ⭐ 单人朗读 | 脚本直接调用 |
+
+**默认推荐**: 方案A（豆包网页版），失败时降级到方案C。
 
 ### 文件命名规则
 - 播客脚本: `{paper_short_name}_podcast.txt`
@@ -488,6 +555,7 @@ sessions_result {session_id}
 - **时间**: 每天上午8:00 AM EST
 - **频率**: 每日一次
 - **标识**: paper-daily-scout-v2
+- **超时**: 建议5400s（90分钟），因豆包播客生成需额外3-5分钟/篇
 
 ### 完整工作流程
 ```
@@ -670,26 +738,32 @@ done
 - 包含图表和公式展示
 - 结构化内容分页
 
-### 6.3 generate-audio.sh
-**功能**: 调用edge-tts生成高质量中文语音（默认），sag作为备选
+### 6.3 generate-audio.sh (方案C: edge-tts)
+**功能**: 调用edge-tts生成中文语音（单人朗读，免费备用方案）
 
 **输入**: 播客脚本文本文件
 **输出**: MP3音频文件
 
 **核心命令**:
 ```bash
-# edge-tts（默认，免费）
 edge-tts -t "$(cat input.txt)" -v YunyangNeural -f mp3 --write-media output.mp3
-
-# sag CLI（备选，需API key）  
-# sag speak -f input.txt -o output.mp3 --no-play --lang zh --model-id eleven_multilingual_v2
 ```
 
-**脚本特点**:
-- 错误处理和重试机制
-- 音频质量检查
-- 文件大小和时长验证
-- 支持批量处理
+### 6.4 volcengine-podcast.py (方案B: 火山引擎API)
+**功能**: 火山引擎播客TTS，双人对话，约10分钟
+
+**凭证**: 通过环境变量 `VOLC_APP_ID` + `VOLC_ACCESS_TOKEN` 提供（不要硬编码！）
+
+```bash
+python3 volcengine-podcast.py --url "https://arxiv.org/abs/..." -o output.mp3
+```
+
+### 6.5 豆包网页版播客 (方案A: 免费推荐)
+**功能**: 通过豆包AI播客生成28-30分钟双人对话播客
+
+**前置**: openclaw browser profile已登录豆包
+**流程**: 见上方"语音生成 — 三种方案"和 `doubao-podcast-flow.md`
+**注意**: 需要agent通过browser工具执行，不是独立脚本
 
 ---
 
