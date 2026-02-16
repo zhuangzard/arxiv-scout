@@ -223,15 +223,22 @@ class PPTGenerator:
     def _normalize_section_name(self, section):
         """标准化section名称"""
         section_map = {
-            '核心贡献': 'contribution',
+            '基本信息': 'info',
+            '论文要解决什么问题': 'background',
             '问题背景与动机': 'background',
+            '核心方法详解': 'method',
             '方法详解': 'method',
+            '实验结果': 'experiment',
             '实验结果分析': 'experiment',
-            '五专家会诊': 'experts',
-            '综合评分': 'score',
+            '我能从这篇论文学到什么': 'takeaways',
             '核心学习要点': 'takeaways',
-            '医疗机器人迁移路径': 'medical',
-            '推荐行动': 'action'
+            '医疗机器人': 'medical',
+            '物理模型的启发': 'medical',
+            '五专家会诊': 'experts',
+            '专家会诊': 'experts',
+            '综合评分': 'score',
+            '推荐行动': 'action',
+            '一句话精华': 'summary'
         }
         
         for key, value in section_map.items():

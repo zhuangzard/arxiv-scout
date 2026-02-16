@@ -26,7 +26,8 @@ set -e  # 出错时退出
 
 # 默认配置
 DEFAULT_TTS_ENGINE="edge-tts"
-DEFAULT_VOICE="zh-CN-YunyangNeural"  # 太森喜欢的专业播音风格
+DEFAULT_VOICE="zh-CN-YunxiNeural"  # 云希，太森喜欢的声音
+DEFAULT_RATE="+15%"  # 提速15%
 DEFAULT_SAG_MODEL="eleven_multilingual_v2"
 DEFAULT_LANG="zh"
 MAX_RETRIES=3
@@ -208,7 +209,7 @@ generate_edge_tts() {
     log_info "声音: $voice"
     
     # edge-tts命令
-    local cmd="python3 -m edge_tts --voice \"$voice\" --file \"$input_file\" --write-media \"$output_file\""
+    local cmd="python3 -m edge_tts --voice \"$voice\" --rate=\"$DEFAULT_RATE\" --file \"$input_file\" --write-media \"$output_file\""
     log_info "执行命令: $cmd"
     
     if eval "$cmd"; then
