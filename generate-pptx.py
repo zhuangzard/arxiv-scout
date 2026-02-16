@@ -1,33 +1,40 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-generate-pptx.py - 将论文精读报告转换为专业PPT幻灯片
+generate-pptx.py - 将论文精读报告转换为专业PPT幻灯片（增强版）
 
 功能：
 - 解析Markdown格式的精读报告
-- 生成20-30页专业PPT幻灯片
-- 浅色背景主题（白色/浅灰）
-- 固定配色方案（蓝白+橙强调）
+- 从PDF提取图片并插入PPT
+- 渲染LaTeX公式为图片并插入PPT
+- 生成25-30页专业PPT幻灯片
+- 白色背景主题，蓝白橙配色
 - 结构化内容分页，包含图表和公式
 
 使用方法：
-python3 generate-pptx.py input_report.md output_slides.pptx
+python3 generate-pptx.py input_report.md output_slides.pptx [--pdf paper.pdf]
 
-依赖：pip3 install python-pptx
+依赖：python-pptx, PyMuPDF/fitz, matplotlib, Pillow
 
 作者：太森的AI助手二丫
-版本：v2.0
+版本：v3.0 - 图片公式增强版
 """
 
 import sys
 import re
 import os
+import argparse
 from datetime import datetime
+from io import BytesIO
+import fitz  # PyMuPDF
+import matplotlib.pyplot as plt
+from PIL import Image
 from pptx import Presentation
 from pptx.util import Inches, Pt
 from pptx.dml.color import RGBColor
 from pptx.enum.text import PP_ALIGN, MSO_ANCHOR
 from pptx.enum.shapes import MSO_SHAPE
+
 
 class PPTGenerator:
     def __init__(self):
@@ -54,12 +61,134 @@ class PPTGenerator:
         # 创建演示文稿
         self.prs = Presentation()
         self._setup_slide_master()
+        
+        # 存储PDF图片
+        self.pdf_figures = []
+        
+        # 配置matplotlib中文字体
+        plt.rcParams['font.family'] = ['Arial Unicode MS', 'SimHei', 'DejaVu Sans']
+        plt.rcParams['axes.unicode_minus'] = False
 
     def _setup_slide_master(self):
         """设置幻灯片母版样式"""
         # 设置幻灯片尺寸为16:9
         self.prs.slide_width = Inches(13.33)
         self.prs.slide_height = Inches(7.5)
+
+    def extract_figures_from_pdf(self, pdf_path):
+        """从PDF提取图片"""
+        if not os.path.exists(pdf_path):
+            print(f"警告：PDF文件 {pdf_path} 不存在")
+            return []
+        
+        print(f"正在从PDF提取图片: {pdf_path}")
+        figures = []
+        
+        try:
+            doc = fitz.open(pdf_path)
+            for page_num in range(doc.page_count):
+                page = doc[page_num]
+                image_list = page.get_images()
+                
+                for img_index, img in enumerate(image_list):
+                    try:
+                        xref = img[0]
+                        pix = fitz.Pixmap(doc, xref)
+                        
+                        # 转换CMYK到RGB
+                        if pix.n >= 5:  # CMYK
+                            pix = fitz.Pixmap(fitz.csRGB, pix)
+                        
+                        # 过滤太小的图片
+                        if pix.width > 100 and pix.height > 100:
+                            img_bytes = pix.tobytes("png")
+                            figures.append({
+                                'page': page_num + 1,  # 从1开始
+                                'data': img_bytes,
+                                'index': img_index,
+                                'width': pix.width,
+                                'height': pix.height
+                            })
+                            print(f"  提取图片: 第{page_num + 1}页, {pix.width}x{pix.height}")
+                        
+                        pix = None  # 释放内存
+                    except Exception as e:
+                        print(f"  跳过图片 (页{page_num + 1}, 索引{img_index}): {e}")
+            
+            doc.close()
+            print(f"✅ 成功提取 {len(figures)} 张图片")
+            
+        except Exception as e:
+            print(f"❌ PDF图片提取失败: {e}")
+        
+        return figures
+
+    def render_formula(self, latex_str, fontsize=16):
+        """渲染LaTeX公式为图片"""
+        try:
+            fig = plt.figure(figsize=(8, 1.5))
+            fig.patch.set_facecolor('white')
+            
+            # 清理LaTeX字符串
+            latex_clean = latex_str.strip()
+            if latex_clean.startswith('$') and latex_clean.endswith('$'):
+                latex_clean = latex_clean[1:-1]
+            
+            fig.text(0.5, 0.5, f'${latex_clean}$', fontsize=fontsize, 
+                    ha='center', va='center', color='black')
+            
+            buf = BytesIO()
+            fig.savefig(buf, format='png', bbox_inches='tight', 
+                       dpi=150, facecolor='white', edgecolor='none')
+            buf.seek(0)
+            plt.close(fig)
+            
+            return buf.getvalue()
+        except Exception as e:
+            print(f"⚠️  LaTeX渲染失败: {latex_str[:50]}... - {e}")
+            return None
+
+    def add_image_to_slide(self, slide, image_bytes, left=None, top=None, width=None):
+        """向幻灯片添加图片"""
+        try:
+            # 默认位置和大小
+            if left is None:
+                left = Inches(8)  # 右侧位置
+            if top is None:
+                top = Inches(2)
+            if width is None:
+                width = Inches(4)
+            
+            image_stream = BytesIO(image_bytes)
+            slide.shapes.add_picture(image_stream, left, top, width)
+            return True
+        except Exception as e:
+            print(f"⚠️  图片插入失败: {e}")
+            return False
+
+    def extract_latex_formulas(self, text):
+        """从文本中提取LaTeX公式"""
+        formulas = []
+        
+        # 匹配 $...$ 和 $$...$$ 
+        patterns = [
+            r'\$\$([^$]+)\$\$',  # 显示公式 $$...$$
+            r'\$([^$]+)\$'       # 行内公式 $...$
+        ]
+        
+        for pattern in patterns:
+            matches = re.finditer(pattern, text)
+            for match in matches:
+                latex_content = match.group(1).strip()
+                if len(latex_content) > 2:  # 过滤太短的
+                    formulas.append({
+                        'latex': latex_content,
+                        'full_match': match.group(0),
+                        'start': match.start(),
+                        'end': match.end()
+                    })
+        
+        return formulas
 
     def parse_markdown_report(self, content):
         """解析Markdown格式的精读报告"""
@@ -112,10 +241,10 @@ class PPTGenerator:
 
     def clean_markdown_format(self, text):
         """清理Markdown格式标记"""
-        # 保留一些格式信息用于PPT处理
-        text = re.sub(r'\*\*([^*]+)\*\*', r'【粗体】\1【/粗体】', text)  # 标记粗体
-        text = re.sub(r'\*([^*]+)\*', r'【斜体】\1【/斜体】', text)      # 标记斜体
-        text = re.sub(r'`([^`]+)`', r'【代码】\1【/代码】', text)        # 标记代码
+        # 简化处理，避免复杂的格式标记系统
+        text = re.sub(r'\*\*([^*]+)\*\*', r'\1', text)  # 移除粗体标记
+        text = re.sub(r'\*([^*]+)\*', r'\1', text)      # 移除斜体标记
+        text = re.sub(r'`([^`]+)`', r'\1', text)        # 移除代码标记
         text = re.sub(r'\[([^\]]+)\]\(([^)]+)\)', r'\1', text)  # 移除链接但保留文字
         text = re.sub(r'^\s*[-*+]\s*', '• ', text, flags=re.MULTILINE)  # 转换列表项
         text = re.sub(r'^\s*(\d+)\.\s*', r'\1. ', text, flags=re.MULTILINE)  # 保留数字列表
@@ -257,8 +386,8 @@ class PPTGenerator:
         footer_run.font.size = self.font_sizes['caption']
         footer_run.font.color.rgb = self.colors['text']
 
-    def add_content_slide(self, title, content, slide_type='normal'):
-        """添加内容页"""
+    def add_content_slide(self, title, content, slide_type='normal', pdf_figures=None, figure_index_start=0):
+        """添加内容页，支持公式渲染和图片插入"""
         slide = self.prs.slides.add_slide(self.prs.slide_layouts[6])  # 空白布局
         
         # 设置背景色
@@ -289,44 +418,76 @@ class PPTGenerator:
         line.fill.fore_color.rgb = self.colors['accent']
         line.line.color.rgb = self.colors['accent']
         
+        # 检测并渲染LaTeX公式
+        formulas = self.extract_latex_formulas(content)
+        
+        # 有图片或公式时，调整布局
+        has_visual_content = bool(formulas) or bool(pdf_figures)
+        if has_visual_content:
+            text_width = Inches(7)  # 左侧文字区域
+            visual_x = Inches(8)    # 右侧图片/公式区域
+        else:
+            text_width = Inches(12.33)
+        
         # 内容区域
-        content_box = slide.shapes.add_textbox(Inches(0.5), Inches(1.3), Inches(12.33), Inches(5.7))
+        content_box = slide.shapes.add_textbox(Inches(0.5), Inches(1.3), text_width, Inches(5.7))
         content_frame = content_box.text_frame
         content_frame.word_wrap = True
         
+        # 处理文本内容（移除LaTeX公式）
+        text_content = content
+        for formula in formulas:
+            text_content = text_content.replace(formula['full_match'], '[公式]')
+        
         # 处理不同类型的内容
         if slide_type == 'bullet_list':
-            self._add_bullet_content(content_frame, content)
+            self._add_bullet_content(content_frame, text_content)
         elif slide_type == 'two_column':
-            self._add_two_column_content(slide, content, 1.3)
+            self._add_two_column_content(slide, text_content, 1.3)
         else:
-            self._add_normal_content(content_frame, content)
+            self._add_normal_content(content_frame, text_content)
+        
+        # 添加公式图片
+        visual_y = Inches(1.5)
+        if formulas:
+            for i, formula in enumerate(formulas[:3]):  # 最多3个公式
+                formula_img = self.render_formula(formula['latex'])
+                if formula_img:
+                    self.add_image_to_slide(slide, formula_img, visual_x, visual_y, Inches(3.5))
+                    visual_y += Inches(1.5)
+        
+        # 添加PDF图片
+        if pdf_figures and figure_index_start < len(pdf_figures):
+            figure = pdf_figures[figure_index_start]
+            self.add_image_to_slide(slide, figure['data'], visual_x, visual_y, Inches(4))
 
     def _add_normal_content(self, text_frame, content):
-        """添加普通文本内容"""
-        paragraphs = content.split('\n\n')
+        """添加普通文本内容（修复API问题）"""
+        text_frame.clear()  # 清空默认段落
         
+        paragraphs = content.split('\n\n')
         for i, para in enumerate(paragraphs):
             if para.strip():
-                if i > 0:
-                    # 添加新段落
-                    p = text_frame.add_paragraph()
+                if i == 0:
+                    p = text_frame.paragraphs[0]  # 使用默认段落
                 else:
-                    p = text_frame.paragraphs[0]
+                    p = text_frame.add_paragraph()  # 正确的API
                 
-                # 处理格式标记
-                self._format_paragraph(p, para.strip())
+                p.text = para.strip()
+                p.font.size = self.font_sizes['text']
+                p.font.color.rgb = self.colors['text']
 
     def _add_bullet_content(self, text_frame, content):
         """添加项目符号内容"""
-        lines = content.split('\n')
+        text_frame.clear()
         
+        lines = content.split('\n')
         for i, line in enumerate(lines):
             if line.strip():
-                if i > 0:
-                    p = text_frame.add_paragraph()
-                else:
+                if i == 0:
                     p = text_frame.paragraphs[0]
+                else:
+                    p = text_frame.add_paragraph()
                 
                 # 设置项目符号
                 if line.strip().startswith('•') or line.strip().startswith('-'):
@@ -339,7 +500,9 @@ class PPTGenerator:
                     p.level = 0
                     text = line.strip()
                 
-                self._format_paragraph(p, text)
+                p.text = text
+                p.font.size = self.font_sizes['text']
+                p.font.color.rgb = self.colors['text']
 
     def _add_two_column_content(self, slide, content, start_y):
         """添加两栏内容"""
@@ -359,49 +522,7 @@ class PPTGenerator:
         if len(parts) > 1:
             self._add_normal_content(right_frame, parts[1])
 
-    def _format_paragraph(self, paragraph, text):
-        """格式化段落文本"""
-        # 处理格式标记
-        parts = re.split(r'【(粗体|斜体|代码)】([^【]*)【/\1】', text)
-        
-        if len(parts) == 1:
-            # 没有特殊格式
-            paragraph.text = text
-            run = paragraph.runs[0]
-            run.font.size = self.font_sizes['text']
-            run.font.color.rgb = self.colors['text']
-        else:
-            # 有特殊格式
-            paragraph.text = ""  # 清空
-            i = 0
-            while i < len(parts):
-                if i % 3 == 0:
-                    # 普通文本
-                    if parts[i]:
-                        run = paragraph.runs.add()
-                        run.text = parts[i]
-                        run.font.size = self.font_sizes['text']
-                        run.font.color.rgb = self.colors['text']
-                elif i % 3 == 1:
-                    # 格式类型
-                    format_type = parts[i]
-                    if i + 1 < len(parts):
-                        formatted_text = parts[i + 1]
-                        run = paragraph.runs.add()
-                        run.text = formatted_text
-                        run.font.size = self.font_sizes['text']
-                        
-                        if format_type == '粗体':
-                            run.font.bold = True
-                            run.font.color.rgb = self.colors['title']
-                        elif format_type == '斜体':
-                            run.font.italic = True
-                            run.font.color.rgb = self.colors['secondary']
-                        elif format_type == '代码':
-                            run.font.color.rgb = self.colors['accent']
-                i += 1
-
-    def add_background_slides(self, sections):
+    def add_background_slides(self, sections, pdf_figures=None):
         """添加问题背景页面"""
         background_content = sections.get('background', '')
         if not background_content:
@@ -413,6 +534,7 @@ class PPTGenerator:
         paragraphs = content.split('\n\n')
         current_page_content = []
         page_count = 0
+        figure_index = 0
         
         for para in paragraphs:
             if para.strip():
@@ -427,8 +549,10 @@ class PPTGenerator:
                         title = f"问题背景与动机 ({page_count})"
                     
                     page_content = '\n\n'.join(current_page_content)
-                    self.add_content_slide(title, page_content)
+                    self.add_content_slide(title, page_content, 'normal', pdf_figures, figure_index)
                     current_page_content = []
+                    if pdf_figures and figure_index < len(pdf_figures):
+                        figure_index += 1
         
         # 处理剩余内容
         if current_page_content:
@@ -439,9 +563,9 @@ class PPTGenerator:
                 title = f"问题背景与动机 ({page_count})"
             
             page_content = '\n\n'.join(current_page_content)
-            self.add_content_slide(title, page_content)
+            self.add_content_slide(title, page_content, 'normal', pdf_figures, figure_index)
 
-    def add_method_slides(self, sections):
+    def add_method_slides(self, sections, pdf_figures=None):
         """添加核心方法页面"""
         method_content = sections.get('method', '')
         if not method_content:
@@ -451,16 +575,22 @@ class PPTGenerator:
         
         # 检测子sections（通过###标题）
         subsections = re.split(r'\n### ([^\n]+)\n', content)
+        figure_index = 1  # 从第二张图开始用于方法页面
         
         if len(subsections) > 1:
             # 有子sections，每个子section一页
-            self.add_content_slide("核心方法概览", subsections[0])
+            if subsections[0].strip():
+                self.add_content_slide("核心方法概览", subsections[0], 'normal', pdf_figures, figure_index)
+                if pdf_figures and figure_index < len(pdf_figures):
+                    figure_index += 1
             
             for i in range(1, len(subsections), 2):
                 if i + 1 < len(subsections):
                     subsection_title = f"核心方法：{subsections[i]}"
                     subsection_content = subsections[i + 1]
-                    self.add_content_slide(subsection_title, subsection_content)
+                    self.add_content_slide(subsection_title, subsection_content, 'normal', pdf_figures, figure_index)
+                    if pdf_figures and figure_index < len(pdf_figures):
+                        figure_index += 1
         else:
             # 没有子sections，按段落分页
             paragraphs = content.split('\n\n')
@@ -480,8 +610,10 @@ class PPTGenerator:
                             title = f"核心方法 ({page_count})"
                         
                         page_content = '\n\n'.join(current_page_content)
-                        self.add_content_slide(title, page_content)
+                        self.add_content_slide(title, page_content, 'normal', pdf_figures, figure_index)
                         current_page_content = []
+                        if pdf_figures and figure_index < len(pdf_figures):
+                            figure_index += 1
             
             # 处理剩余内容
             if current_page_content:
@@ -492,15 +624,16 @@ class PPTGenerator:
                     title = f"核心方法 ({page_count})"
                 
                 page_content = '\n\n'.join(current_page_content)
-                self.add_content_slide(title, page_content)
+                self.add_content_slide(title, page_content, 'normal', pdf_figures, figure_index)
 
-    def add_experiment_slides(self, sections):
+    def add_experiment_slides(self, sections, pdf_figures=None):
         """添加实验结果页面"""
         experiment_content = sections.get('experiment', '')
         if not experiment_content:
             return
         
         content = self.clean_markdown_format(experiment_content)
+        figure_index = min(len(pdf_figures) // 2, 5) if pdf_figures else 0  # 实验用中后部分图片
         
         # 尝试识别表格数据
         if '|' in content:
@@ -518,12 +651,14 @@ class PPTGenerator:
             # 文字内容页
             if text_parts:
                 text_content = '\n\n'.join(text_parts)
-                self.add_content_slide("实验设置与分析", text_content)
+                self.add_content_slide("实验设置与分析", text_content, 'normal', pdf_figures, figure_index)
+                if pdf_figures and figure_index < len(pdf_figures):
+                    figure_index += 1
             
             # 表格数据页
             if table_parts:
                 table_content = '\n\n'.join(table_parts)
-                self.add_content_slide("实验结果数据", table_content, 'two_column')
+                self.add_content_slide("实验结果数据", table_content, 'two_column', pdf_figures, figure_index)
         else:
             # 普通文本，按段落分页
             paragraphs = content.split('\n\n')
@@ -542,8 +677,10 @@ class PPTGenerator:
                             title = f"实验结果分析 ({page_count})"
                         
                         page_content = '\n\n'.join(current_page_content)
-                        self.add_content_slide(title, page_content)
+                        self.add_content_slide(title, page_content, 'normal', pdf_figures, figure_index)
                         current_page_content = []
+                        if pdf_figures and figure_index < len(pdf_figures):
+                            figure_index += 1
             
             # 处理剩余内容
             if current_page_content:
@@ -554,7 +691,7 @@ class PPTGenerator:
                     title = f"实验结果分析 ({page_count})"
                 
                 page_content = '\n\n'.join(current_page_content)
-                self.add_content_slide(title, page_content)
+                self.add_content_slide(title, page_content, 'normal', pdf_figures, figure_index)
 
     def add_expert_slides(self, sections):
         """添加五专家会诊页面"""
@@ -670,10 +807,10 @@ class PPTGenerator:
         
         for para in thanks_frame.paragraphs:
             para.alignment = PP_ALIGN.CENTER
-            for run in para.runs:
-                run.font.size = self.font_sizes['title']
-                run.font.color.rgb = self.colors['title']
-                run.font.bold = True
+            run = para.runs[0] if para.runs else para.add_run()
+            run.font.size = self.font_sizes['title']
+            run.font.color.rgb = self.colors['title']
+            run.font.bold = True
         
         # 底部信息
         footer_box = slide.shapes.add_textbox(Inches(2), Inches(5.5), Inches(9.33), Inches(1))
@@ -682,12 +819,17 @@ class PPTGenerator:
         
         footer_para = footer_frame.paragraphs[0]
         footer_para.alignment = PP_ALIGN.CENTER
-        footer_run = footer_para.runs[0]
+        footer_run = footer_para.runs[0] if footer_para.runs else footer_para.add_run()
         footer_run.font.size = self.font_sizes['text']
         footer_run.font.color.rgb = self.colors['text']
 
-    def generate_pptx(self, sections):
+    def generate_pptx(self, sections, pdf_path=None):
         """生成完整的PPT"""
+        # 提取PDF图片
+        pdf_figures = []
+        if pdf_path:
+            pdf_figures = self.extract_figures_from_pdf(pdf_path)
+        
         # 提取论文信息
         paper_info = self.extract_paper_info(sections)
         
@@ -695,13 +837,13 @@ class PPTGenerator:
         self.add_title_slide(paper_info)
         
         # 2. 问题背景（2-3页）
-        self.add_background_slides(sections)
+        self.add_background_slides(sections, pdf_figures)
         
-        # 3. 核心方法（8-12页）
-        self.add_method_slides(sections)
+        # 3. 核心方法（10-15页，重点含图含公式）
+        self.add_method_slides(sections, pdf_figures)
         
         # 4. 实验结果（3-5页）
-        self.add_experiment_slides(sections)
+        self.add_experiment_slides(sections, pdf_figures)
         
         # 5. 专家会诊（5页）
         self.add_expert_slides(sections)
@@ -720,59 +862,83 @@ class PPTGenerator:
         
         return self.prs
 
+
 def main():
-    if len(sys.argv) != 3:
-        print("使用方法: python3 generate-pptx.py input_report.md output_slides.pptx")
-        print("示例: python3 generate-pptx.py paper_analysis.md presentation.pptx")
-        sys.exit(1)
+    parser = argparse.ArgumentParser(description='将论文精读报告转换为专业PPT幻灯片')
+    parser.add_argument('input_report', help='输入的Markdown报告文件')
+    parser.add_argument('output_pptx', help='输出的PPT文件')
+    parser.add_argument('--pdf', help='论文PDF文件路径（可选，用于提取图片）')
     
-    input_file = sys.argv[1]
-    output_file = sys.argv[2]
+    args = parser.parse_args()
+    
+    input_file = args.input_report
+    output_file = args.output_pptx
+    pdf_file = args.pdf
     
     if not os.path.exists(input_file):
-        print(f"错误：输入文件 {input_file} 不存在")
+        print(f"❌ 错误：输入文件 {input_file} 不存在")
+        sys.exit(1)
+    
+    if pdf_file and not os.path.exists(pdf_file):
+        print(f"❌ 错误：PDF文件 {pdf_file} 不存在")
         sys.exit(1)
     
     try:
-        # 检查python-pptx是否安装
+        # 检查依赖
+        import fitz, matplotlib, PIL
         from pptx import Presentation
-    except ImportError:
-        print("错误：未安装python-pptx库")
-        print("请运行: pip3 install python-pptx")
+    except ImportError as e:
+        print(f"❌ 错误：缺少依赖库 {e}")
+        print("请运行: pip3 install python-pptx PyMuPDF matplotlib Pillow")
         sys.exit(1)
     
     try:
         # 读取输入文件
+        print(f"📖 正在读取报告: {input_file}")
         with open(input_file, 'r', encoding='utf-8') as f:
             content = f.read()
         
         # 生成PPT
+        print("🎨 正在生成PPT...")
         generator = PPTGenerator()
         sections = generator.parse_markdown_report(content)
-        prs = generator.generate_pptx(sections)
+        prs = generator.generate_pptx(sections, pdf_file)
         
         # 保存PPT
         prs.save(output_file)
         
+        # 统计信息
         slide_count = len(prs.slides)
         file_size = os.path.getsize(output_file) / (1024 * 1024)  # MB
         
-        print(f"✅ PPT幻灯片生成完成！")
+        # 验证图片数量
+        image_count = 0
+        for slide in prs.slides:
+            for shape in slide.shapes:
+                if hasattr(shape, 'shape_type') and shape.shape_type == 13:  # 图片类型
+                    image_count += 1
+        
+        print(f"\n✅ PPT生成完成！")
         print(f"📊 输出文件: {output_file}")
         print(f"📄 幻灯片数量: {slide_count}页")
+        print(f"🖼️  图片数量: {image_count}张")
         print(f"💾 文件大小: {file_size:.2f}MB")
-        print(f"🎨 主题: 浅色背景，蓝白配色")
+        print(f"🎨 主题: 白色背景，蓝白橙配色")
         
-        if slide_count < 15:
+        if slide_count < 25:
             print("⚠️  警告：幻灯片数量偏少，建议检查输入报告的完整性")
         elif slide_count > 35:
             print("⚠️  提醒：幻灯片数量较多，可能需要考虑内容精简")
-    
+        
+        if image_count > 0:
+            print(f"✨ 成功插入 {image_count} 张图片和公式")
+        
     except Exception as e:
         print(f"❌ 生成PPT时出错: {str(e)}")
         import traceback
         traceback.print_exc()
         sys.exit(1)
+
 
 if __name__ == "__main__":
     main()

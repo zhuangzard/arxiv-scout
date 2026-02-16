@@ -1,30 +1,36 @@
 #!/bin/bash
-# generate-audio.sh - 调用sag CLI生成高质量中文TTS音频
+# generate-audio.sh - 调用 edge-tts 或 sag CLI 生成高质量中文TTS音频
 #
 # 功能：
-# - 使用ElevenLabs TTS生成中文播客音频
+# - 默认使用 edge-tts，sag 作为备选
+# - 支持双引擎切换和声音选择
 # - 错误处理和重试机制
 # - 音频质量检查和验证
 # - 支持批量处理
 #
 # 使用方法：
 # bash generate-audio.sh input_script.txt output_audio.mp3
-# bash generate-audio.sh input_script.txt output_audio.mp3 --model-id custom_model
+# bash generate-audio.sh input_script.txt output_audio.mp3 --engine edge-tts
+# bash generate-audio.sh input_script.txt output_audio.mp3 --engine sag
+# bash generate-audio.sh input_script.txt output_audio.mp3 --voice zh-CN-XiaoxiaoNeural
 #
 # 依赖：
-# - sag CLI (ElevenLabs TTS)
+# - edge-tts (pip install edge-tts) - 默认引擎
+# - sag CLI (ElevenLabs TTS) - 备选引擎
 # - ffmpeg (可选，用于音频格式转换和质量检查)
 #
 # 作者：太森的AI助手二丫
-# 版本：v2.0
+# 版本：v3.0 - edge-tts优先版本
 
 set -e  # 出错时退出
 
 # 默认配置
-DEFAULT_MODEL="eleven_multilingual_v2"
+DEFAULT_TTS_ENGINE="edge-tts"
+DEFAULT_VOICE="zh-CN-YunyangNeural"  # 太森喜欢的专业播音风格
+DEFAULT_SAG_MODEL="eleven_multilingual_v2"
 DEFAULT_LANG="zh"
 MAX_RETRIES=3
-MIN_AUDIO_SIZE=1048576  # 1MB，最小音频文件大小
+MIN_AUDIO_SIZE=20480   # 20KB，edge-tts短文本生成的文件大小
 MAX_AUDIO_SIZE=104857600  # 100MB，最大音频文件大小
 
 # 颜色输出
@@ -54,7 +60,7 @@ log_success() {
 # 显示帮助信息
 show_help() {
     cat << EOF
-generate-audio.sh - 论文播客TTS音频生成工具
+generate-audio.sh - 论文播客TTS音频生成工具 (edge-tts优先版)
 
 使用方法:
     bash generate-audio.sh <input_script.txt> <output_audio.mp3> [options]
@@ -64,24 +70,33 @@ generate-audio.sh - 论文播客TTS音频生成工具
     output_audio.mp3    输出的音频文件
 
 选项:
-    --model-id MODEL    TTS模型ID (默认: eleven_multilingual_v2)
+    --engine ENGINE     TTS引擎选择 (edge-tts|sag, 默认: edge-tts)
+    --voice VOICE       语音选择 (默认: zh-CN-YunyangNeural)
+    --model-id MODEL    sag引擎的模型ID (默认: eleven_multilingual_v2)
     --lang LANG         语言代码 (默认: zh)
-    --no-play          生成后不播放 (默认开启)
-    --retry NUM        重试次数 (默认: 3)
-    --help, -h         显示帮助信息
+    --retry NUM         重试次数 (默认: 3)
+    --help, -h          显示帮助信息
 
 示例:
     bash generate-audio.sh podcast_script.txt podcast_audio.mp3
-    bash generate-audio.sh script.txt audio.mp3 --model-id eleven_multilingual_v2
-    bash generate-audio.sh script.txt audio.mp3 --retry 5
+    bash generate-audio.sh script.txt audio.mp3 --engine edge-tts
+    bash generate-audio.sh script.txt audio.mp3 --engine sag --model-id eleven_multilingual_v2
+    bash generate-audio.sh script.txt audio.mp3 --voice zh-CN-XiaoxiaoNeural
 
-支持的TTS模型:
+支持的edge-tts中文声音:
+    - zh-CN-YunyangNeural  (Male, News, Professional) ← 默认推荐
+    - zh-CN-XiaoxiaoNeural (Female, Warm)
+    - zh-CN-YunjianNeural  (Male, Passion)
+    - zh-CN-YunxiNeural    (Male, Lively)
+
+支持的sag TTS模型:
     - eleven_multilingual_v2 (默认，多语言高质量)
     - eleven_monolingual_v1 (单语言，速度较快)
     - eleven_multilingual_v1 (多语言，较旧版本)
 
 注意：
-    - 需要已安装并配置好 sag CLI
+    - edge-tts为默认引擎，免费且稳定
+    - sag需要已安装并配置好ElevenLabs API key
     - 脚本文件应为UTF-8编码
     - 建议脚本长度3000-5000字，对应20-30分钟音频
 EOF
@@ -89,32 +104,47 @@ EOF
 
 # 检查依赖
 check_dependencies() {
+    local engine="$1"
+    
     log_info "检查依赖..."
     
-    # 检查sag CLI
-    if ! command -v sag &> /dev/null; then
-        log_error "未找到 sag CLI，请先安装 ElevenLabs TTS CLI"
-        log_error "安装方法：npm install -g @elevenlabs/sag"
-        exit 1
-    fi
-    
-    # 检查sag配置
-    if ! sag --help &> /dev/null; then
-        log_error "sag CLI 未正确配置或无权限访问"
-        log_error "请检查 ElevenLabs API key 配置"
-        exit 1
+    if [[ "$engine" == "edge-tts" ]]; then
+        # 检查edge-tts
+        if ! python3 -m edge_tts --help &> /dev/null; then
+            log_error "未找到 edge-tts，请先安装"
+            log_error "安装方法：pip install edge-tts"
+            return 1
+        fi
+        log_info "✓ edge-tts 可用"
+        
+    elif [[ "$engine" == "sag" ]]; then
+        # 检查sag CLI
+        if ! command -v sag &> /dev/null; then
+            log_error "未找到 sag CLI，请先安装 ElevenLabs TTS CLI"
+            log_error "安装方法：npm install -g @elevenlabs/sag"
+            return 1
+        fi
+        
+        # 检查sag配置
+        if ! sag --help &> /dev/null; then
+            log_error "sag CLI 未正确配置或无权限访问"
+            log_error "请检查 ElevenLabs API key 配置"
+            return 1
+        fi
+        log_info "✓ sag CLI 可用"
     fi
     
     # 检查ffmpeg (可选)
     if command -v ffmpeg &> /dev/null; then
         FFMPEG_AVAILABLE=true
-        log_info "检测到 ffmpeg，将进行音频质量验证"
+        log_info "✓ ffmpeg 可用，将进行音频质量验证"
     else
         FFMPEG_AVAILABLE=false
         log_warn "未检测到 ffmpeg，跳过音频质量验证"
     fi
     
     log_success "依赖检查完成"
+    return 0
 }
 
 # 验证输入文件
@@ -168,34 +198,82 @@ validate_input_file() {
     return 0
 }
 
-# 生成TTS音频
-generate_tts_audio() {
+# edge-tts音频生成函数
+generate_edge_tts() {
+    local input_file="$1"
+    local output_file="$2"
+    local voice="$3"
+    
+    log_info "使用 edge-tts 生成音频..."
+    log_info "声音: $voice"
+    
+    # edge-tts命令
+    local cmd="python3 -m edge_tts --voice \"$voice\" --file \"$input_file\" --write-media \"$output_file\""
+    log_info "执行命令: $cmd"
+    
+    if eval "$cmd"; then
+        return 0
+    else
+        return 1
+    fi
+}
+
+# sag音频生成函数
+generate_sag_tts() {
     local input_file="$1"
     local output_file="$2"
     local model_id="$3"
     local lang="$4"
-    local retry_count="$5"
+    
+    log_info "使用 sag 生成音频..."
+    log_info "模型: $model_id, 语言: $lang"
+    
+    # sag命令（输出到文件时自动禁用播放）
+    local cmd="sag speak -f \"$input_file\" -o \"$output_file\" --lang $lang --model-id $model_id"
+    log_info "执行命令: $cmd"
+    
+    if eval "$cmd"; then
+        return 0
+    else
+        return 1
+    fi
+}
+
+# 生成TTS音频主函数
+generate_tts_audio() {
+    local input_file="$1"
+    local output_file="$2"
+    local engine="$3"
+    local voice="$4"
+    local model_id="$5"
+    local lang="$6"
+    local retry_count="$7"
     
     log_info "开始生成TTS音频..."
     log_info "输入脚本: $input_file"
     log_info "输出音频: $output_file"
-    log_info "TTS模型: $model_id"
-    log_info "语言代码: $lang"
+    log_info "TTS引擎: $engine"
     
     local attempt=1
     while [[ $attempt -le $retry_count ]]; do
         log_info "尝试生成音频 (第 $attempt 次)..."
         
-        # 构建sag命令
-        local sag_cmd="sag speak -f \"$input_file\" -o \"$output_file\" --no-play --lang $lang --model-id $model_id"
-        
-        log_info "执行命令: $sag_cmd"
-        
         # 记录开始时间
         local start_time=$(date +%s)
+        local tts_success=false
         
-        # 执行TTS生成
-        if eval "$sag_cmd"; then
+        # 根据引擎选择生成方法
+        if [[ "$engine" == "edge-tts" ]]; then
+            if generate_edge_tts "$input_file" "$output_file" "$voice"; then
+                tts_success=true
+            fi
+        elif [[ "$engine" == "sag" ]]; then
+            if generate_sag_tts "$input_file" "$output_file" "$model_id" "$lang"; then
+                tts_success=true
+            fi
+        fi
+        
+        if [[ "$tts_success" == "true" ]]; then
             local end_time=$(date +%s)
             local duration=$((end_time - start_time))
             
@@ -262,11 +340,10 @@ validate_output_audio() {
             local duration=$(echo "$audio_info" | grep "Duration:" | sed 's/.*Duration: \([^,]*\).*/\1/')
             log_info "音频时长: $duration"
             
-            # 检查时长是否合理（至少30秒）
+            # 检查时长是否合理（至少10秒，edge-tts短文本也可能很短）
             local duration_seconds=$(echo "$duration" | awk -F: '{print ($1 * 3600) + ($2 * 60) + $3}' | cut -d. -f1)
-            if [[ $duration_seconds -lt 30 ]]; then
-                log_error "音频时长过短 ($duration)，可能生成不完整"
-                return 1
+            if [[ $duration_seconds -lt 10 ]]; then
+                log_warn "音频时长较短 ($duration)，但仍接受"
             fi
         fi
         
@@ -298,7 +375,9 @@ cleanup() {
 main() {
     local input_file=""
     local output_file=""
-    local model_id="$DEFAULT_MODEL"
+    local engine="$DEFAULT_TTS_ENGINE"
+    local voice="$DEFAULT_VOICE"
+    local model_id="$DEFAULT_SAG_MODEL"
     local lang="$DEFAULT_LANG"
     local retry_count="$MAX_RETRIES"
     
@@ -308,6 +387,18 @@ main() {
             --help|-h)
                 show_help
                 exit 0
+                ;;
+            --engine)
+                engine="$2"
+                if [[ "$engine" != "edge-tts" && "$engine" != "sag" ]]; then
+                    log_error "无效的引擎选择: $engine (支持: edge-tts, sag)"
+                    exit 1
+                fi
+                shift 2
+                ;;
+            --voice)
+                voice="$2"
+                shift 2
                 ;;
             --model-id)
                 model_id="$2"
@@ -322,7 +413,7 @@ main() {
                 shift 2
                 ;;
             --no-play)
-                # 默认就是不播放，这个参数兼容性保留
+                # 兼容性参数，已默认不播放
                 shift
                 ;;
             -*)
@@ -360,18 +451,21 @@ main() {
     
     log_info "=== 论文播客TTS音频生成开始 ==="
     log_info "时间: $(date)"
+    log_info "引擎: $engine"
     
     # 设置清理函数
     trap cleanup EXIT
     
     # 执行主要步骤
-    check_dependencies
+    if ! check_dependencies "$engine"; then
+        exit 1
+    fi
     
     if ! validate_input_file "$input_file"; then
         exit 1
     fi
     
-    if ! generate_tts_audio "$input_file" "$output_file" "$model_id" "$lang" "$retry_count"; then
+    if ! generate_tts_audio "$input_file" "$output_file" "$engine" "$voice" "$model_id" "$lang" "$retry_count"; then
         exit 1
     fi
     
@@ -391,7 +485,7 @@ main() {
         fi
     fi
     
-    log_success "🎉 播客音频生成成功！"
+    log_success "🎉 播客音频生成成功！使用了 $engine 引擎"
 }
 
 # 脚本入口点

@@ -1,0 +1,14 @@
+__pycache__/
+*.pyc
+*.pyo
+*.mp3
+*.pptx
+*.pdf
+*.html
+*_podcast.txt
+temp/
+.env
+.DS_Store
+*.egg-info/
+dist/
+build/

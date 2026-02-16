@@ -281,8 +281,10 @@ bash SKILL_DIR/generate-audio.sh output_podcast.txt output_podcast.mp3
 
 ### 语音生成指令
 ```bash
-# 使用sag CLI生成MP3
-sag speak -f {script_file}.txt -o {output_file}.mp3 --no-play --lang zh --model-id eleven_multilingual_v2
+# 使用edge-tts生成MP3（默认），sag作为备选
+edge-tts -t "$(cat {script_file}.txt)" -v YunyangNeural -f mp3 --write-media {output_file}.mp3
+# 或使用sag CLI（需ElevenLabs API key）
+# sag speak -f {script_file}.txt -o {output_file}.mp3 --no-play --lang zh --model-id eleven_multilingual_v2
 ```
 
 ### 文件命名规则
@@ -444,7 +446,7 @@ Sub-Agent-1 (Paper 1)          Sub-Agent-2 (Paper 2)          Sub-Agent-N (Paper
 
 5. **语音生成**
    - 调用 `generate-audio.sh`
-   - 使用sag CLI生成MP3
+   - 使用edge-tts生成MP3（默认），sag作为备选
    - 保存语音文件
 
 6. **文件整理**
@@ -595,7 +597,7 @@ done
    - 生成2000+字精读报告（五专家会诊）
    - 生成4000字播客脚本（深度技术讲解）
    - 生成20-30页PPT幻灯片（浅色背景）
-   - 生成MP3语音文件（sag CLI）
+   - 生成MP3语音文件（edge-tts默认）
    - 保存所有格式文件
 
 4. 文件保存
@@ -636,14 +638,20 @@ done
 ## 6. 核心脚本规格
 
 ### 6.1 generate-podcast.py
-**功能**: 将精读报告转换为4000字播客脚本
+**功能**: 播客脚本生成辅助工具（4000字播客文稿主要由agent用LLM生成）
 
 **输入**: Markdown格式的精读报告
 **输出**: 4000字中文播客脚本（.txt格式）
 
+**说明**: 
+- 这个脚本是辅助工具，真正的4000字播客文稿由agent用LLM生成
+- 脚本可用于格式检查和后处理
+- LLM生成的播客文稿更自然、更有深度
+- 脚本主要用于标准化输出格式和质量控制
+
 **脚本特点**:
 - 解析精读报告的结构化内容
-- 转换为口语化的播客风格
+- 转换为口语化的播客风格  
 - 数学公式口语化处理
 - 添加播客特有的过渡语言
 - 保持技术深度但增加可听性
@@ -663,14 +671,18 @@ done
 - 结构化内容分页
 
 ### 6.3 generate-audio.sh
-**功能**: 调用sag CLI生成高质量中文语音
+**功能**: 调用edge-tts生成高质量中文语音（默认），sag作为备选
 
 **输入**: 播客脚本文本文件
 **输出**: MP3音频文件
 
 **核心命令**:
 ```bash
-sag speak -f input.txt -o output.mp3 --no-play --lang zh --model-id eleven_multilingual_v2
+# edge-tts（默认，免费）
+edge-tts -t "$(cat input.txt)" -v YunyangNeural -f mp3 --write-media output.mp3
+
+# sag CLI（备选，需API key）  
+# sag speak -f input.txt -o output.mp3 --no-play --lang zh --model-id eleven_multilingual_v2
 ```
 
 **脚本特点**:
@@ -714,7 +726,7 @@ sag speak -f input.txt -o output.mp3 --no-play --lang zh --model-id eleven_multi
 ### 常见错误场景
 1. **论文获取失败**: arXiv链接失效或PDF无法下载
 2. **API限制**: HuggingFace API请求频率限制
-3. **TTS生成失败**: sag CLI调用失败或音频质量异常
+3. **TTS生成失败**: edge-tts/sag CLI调用失败或音频质量异常
 4. **PPT生成错误**: python-pptx库异常或图片处理失败
 5. **文件系统问题**: iCloud同步异常或磁盘空间不足
 
