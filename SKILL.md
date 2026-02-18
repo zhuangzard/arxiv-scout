@@ -610,6 +610,39 @@ sessions_result {session_id}
 └── ...                      # 更多论文
 ```
 
+### 知识沉淀（每篇论文完成后必做）
+
+每篇论文精读完成后，**必须**提取核心知识写入知识库：
+
+**知识库路径**: `workspace/knowledge-papers/`
+
+**领域文件**:
+- `robotics-manipulation.md` — 机器人操作/抓取/VLA
+- `surgical-medical-ai.md` — 手术机器人/医疗AI
+- `foundation-models.md` — 基础模型/大模型架构
+- `training-methods.md` — 训练方法论（RL/IL/sim2real等）
+- `perception-sensing.md` — 感知/视觉/触觉
+- `key-insights.md` — 跨领域关键洞察和启发
+
+**每篇论文提取模板**（append到对应领域文件）:
+```markdown
+### [论文名] (arxiv_id, YYYY-MM-DD)
+- **核心方法**: 一句话概括
+- **关键创新**: 2-3个bullet
+- **重要公式/架构**: 核心公式或架构名
+- **实验结论**: 关键数字和对比
+- **医疗机器人迁移**: 具体迁移思路
+- **可复用idea**: 可直接工程化的点
+```
+
+**分类规则**: 一篇论文可能涉及多个领域，选最相关的1-2个写入。跨领域洞察写入 `key-insights.md`。
+
+**知识库索引**: 每日所有论文处理完成后运行:
+```bash
+qmd update workspace/knowledge-papers/
+qmd embed workspace/knowledge-papers/
+```
+
 ### Telegram推送内容
 1. **总结消息**: HTML格式的当日论文总结
 2. **PDF文件**: 所有论文的PDF原文
@@ -841,15 +874,13 @@ python3 generate-pptx.py 2402.12345.md 2402.12345_slides.pptx
 # 6. 生成语音文件
 bash generate-audio.sh 2402.12345_podcast.txt 2402.12345_podcast.mp3
 
-# 7. 转换HTML格式
-python3 -c "
-import markdown
-with open('2402.12345.md', 'r') as f:
-    md_content = f.read()
-html_content = markdown.markdown(md_content, extensions=['tables'])
-with open('2402.12345.html', 'w') as f:
-    f.write(html_content)
-"
+# 7. 转换HTML格式（支持LaTeX公式渲染）
+python3 SKILL_DIR/generate-html.py 2402.12345.md 2402.12345.html
+# generate-html.py 功能：
+# - 自动检测 $...$ 和 $$...$$ LaTeX公式
+# - 使用KaTeX CDN在浏览器端实时渲染公式
+# - 学术风格CSS（白底、#1B3A5C标题、表格美化）
+# - 支持表格、代码块、引用块等Markdown扩展
 ```
 
 ### 多论文批量处理
